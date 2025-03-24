@@ -487,6 +487,41 @@ class FastMCP:
             logger.error(f"Error getting prompt {name}: {e}")
             raise ValueError(str(e))
 
+    @staticmethod
+    def run_app(
+        routes: list,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 8000,
+        debug: bool = False,
+        log_level: str = "info"
+    ) -> None:
+        """Run a Starlette application with the given routes.
+
+        Args:
+            routes: List of Starlette routes to use in the application
+            host: Host to bind to
+            port: Port to bind to
+            debug: Enable debug mode
+            log_level: Logging level (debug, info, warning, error)
+        """
+        import uvicorn
+        from starlette.applications import Starlette
+
+        app = Starlette(
+            debug=debug,
+            routes=routes
+        )
+
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level=log_level.lower(),
+        )
+        server = uvicorn.Server(config)
+        server.run()
+
 
 def _convert_to_content(
     result: Any,
