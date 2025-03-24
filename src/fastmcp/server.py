@@ -6,35 +6,22 @@ import inspect
 import json
 import re
 from itertools import chain
-from typing import Any, Callable, Dict, Literal, Sequence, TypeVar, ParamSpec
+from typing import Any, Callable, Dict, Literal, ParamSpec, Sequence, TypeVar
 
 import pydantic_core
-from pydantic import Field
 import uvicorn
 from mcp.server import Server as MCPServer
 from mcp.server.sse import SseServerTransport
 from mcp.server.stdio import stdio_server
 from mcp.shared.context import RequestContext
-from mcp.types import (
-    EmbeddedResource,
-    GetPromptResult,
-    ImageContent,
-    TextContent,
-)
-from mcp.types import (
-    Prompt as MCPPrompt,
-    PromptArgument as MCPPromptArgument,
-)
-from mcp.types import (
-    Resource as MCPResource,
-)
-from mcp.types import (
-    ResourceTemplate as MCPResourceTemplate,
-)
-from mcp.types import (
-    Tool as MCPTool,
-)
-from pydantic import BaseModel
+from mcp.types import EmbeddedResource, GetPromptResult, ImageContent
+from mcp.types import Prompt as MCPPrompt
+from mcp.types import PromptArgument as MCPPromptArgument
+from mcp.types import Resource as MCPResource
+from mcp.types import ResourceTemplate as MCPResourceTemplate
+from mcp.types import TextContent
+from mcp.types import Tool as MCPTool
+from pydantic import BaseModel, Field
 from pydantic.networks import AnyUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -73,6 +60,7 @@ class Settings(BaseSettings):
     # HTTP settings
     host: str = "0.0.0.0"
     port: int = 8000
+    route_prefix: str = "/api"
 
     # resource settings
     warn_on_duplicate_resources: bool = True
@@ -103,6 +91,7 @@ class FastMCP:
             warn_on_duplicate_prompts=self.settings.warn_on_duplicate_prompts
         )
         self.dependencies = self.settings.dependencies
+        self.route_prefix = self.settings.route_prefix.rstrip("/")
 
         # Set up MCP protocol handlers
         self._setup_handlers()
@@ -428,9 +417,29 @@ class FastMCP:
     async def run_sse_async(self) -> None:
         """Run the server using SSE transport."""
         from starlette.applications import Starlette
-        from starlette.routing import Route, Mount
+        starlette_app = Starlette(
+            debug=self.settings.debug,
+            routes=self.get_routes(),
+        )
 
-        sse = SseServerTransport("/messages/")
+        config = uvicorn.Config(
+            starlette_app,
+            host=self.settings.host,
+            port=self.settings.port,
+            log_level=self.settings.log_level.lower(),
+        )
+        server = uvicorn.Server(config)
+        await server.serve()
+
+    def get_routes(self) -> list:
+        """Get the routes for the FastMCP server.
+        
+        Returns:
+            list: A list of Starlette Route objects that can be used in a Starlette application.
+        """
+        from starlette.routing import Mount, Route
+
+        sse = SseServerTransport(f"{self.route_prefix}/messages/")
 
         async def handle_sse(request):
             async with sse.connect_sse(
@@ -442,22 +451,10 @@ class FastMCP:
                     self._mcp_server.create_initialization_options(),
                 )
 
-        starlette_app = Starlette(
-            debug=self.settings.debug,
-            routes=[
-                Route("/sse", endpoint=handle_sse),
-                Mount("/messages/", app=sse.handle_post_message),
-            ],
-        )
-
-        config = uvicorn.Config(
-            starlette_app,
-            host=self.settings.host,
-            port=self.settings.port,
-            log_level=self.settings.log_level.lower(),
-        )
-        server = uvicorn.Server(config)
-        await server.serve()
+        return [
+            Route(f"{self.route_prefix}/sse", endpoint=handle_sse),
+            Mount(f"{self.route_prefix}/messages/", app=sse.handle_post_message),
+        ]
 
     async def list_prompts(self) -> list[MCPPrompt]:
         """List all available prompts."""
